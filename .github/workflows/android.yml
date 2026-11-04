@@ -1,44 +1,80 @@
-
-name: Waleed Hero - Build Android APK
+name: Waleed Hero - Strong Android Builder
 
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
-      - master
+    branches: [main, master]
 
 permissions:
   contents: read
 
 jobs:
-  build-apk:
+  build:
     name: Build Waleed Hero APK
     runs-on: ubuntu-24.04
 
-    container:
-      image: barichello/godot-ci:4.3.0
-
     steps:
-      - name: Checkout Repository
+      - name: Checkout Project
         uses: actions/checkout@v4
 
-      - name: Install unzip
+      - name: Install Dependencies
         run: |
-          apt-get update
-          apt-get install -y unzip
+          sudo apt-get update
+          sudo apt-get install -y unzip wget zip python3
 
-      - name: Extract ZIP if needed
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android Packages
+        run: |
+          sdkmanager "platform-tools"
+          sdkmanager "platforms;android-34"
+          sdkmanager "build-tools;34.0.0"
+          yes | sdkmanager --licenses || true
+
+      - name: Download Godot 4.3
+        run: |
+          mkdir -p "$HOME/godot"
+          cd "$HOME/godot"
+
+          wget -q https://github.com/godotengine/godot/releases/download/4.3-stable/Godot_v4.3-stable_linux.x86_64.zip
+          unzip -q Godot_v4.3-stable_linux.x86_64.zip
+          
+          # إنشاء اختصار لسهولة استدعاء الأمر
+          cp Godot_v4.3-stable_linux.x86_64 "$HOME/godot/godot"
+          chmod +x "$HOME/godot/godot"
+
+          echo "$HOME/godot" >> "$GITHUB_PATH"
+
+      - name: Install Godot Export Templates
+        run: |
+          mkdir -p /tmp/godot-templates
+
+          wget -q https://github.com/godotengine/godot/releases/download/4.3-stable/Godot_v4.3-stable_export_templates.tpz -O /tmp/templates.tpz
+          unzip -q /tmp/templates.tpz -d /tmp/godot-templates
+
+          mkdir -p "$HOME/.local/share/godot/export_templates/4.3.stable"
+
+          if [ -d /tmp/godot-templates/templates ]; then
+            cp -a /tmp/godot-templates/templates/. "$HOME/.local/share/godot/export_templates/4.3.stable/"
+          else
+            cp -a /tmp/godot-templates/. "$HOME/.local/share/godot/export_templates/4.3.stable/"
+          fi
+
+      - name: Extract ZIP If Necessary
         shell: bash
         run: |
-          if ! find . -name project.godot \
-            -not -path './.git/*' | grep -q .; then
-
-            ZIP_FILE=$(find . -maxdepth 2 \
-              -name "*.zip" | head -n 1)
+          if ! find . -name project.godot -not -path './.git/*' | grep -q .; then
+            ZIP_FILE=$(find . -maxdepth 2 -name "*.zip" | head -n 1)
 
             if [ -z "$ZIP_FILE" ]; then
-              echo "ERROR: No project.godot or ZIP found"
+              echo "ERROR: No Godot project or ZIP found"
               exit 1
             fi
 
@@ -46,30 +82,41 @@ jobs:
             unzip -o "$ZIP_FILE" -d extracted
           fi
 
-      - name: Locate Godot Project
+      - name: Find Godot Project
         shell: bash
         run: |
-          PROJECT_FILE=$(find . -name project.godot \
-            -not -path './.git/*' | head -n 1)
+          PROJECT_FILE=$(find . -name project.godot -not -path './.git/*' | head -n 1)
 
           if [ -z "$PROJECT_FILE" ]; then
-            echo "ERROR: project.godot not found"
+            echo "ERROR: project.godot missing"
             exit 1
           fi
 
           PROJECT_DIR=$(dirname "$PROJECT_FILE")
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Found project: $PROJECT_DIR"
 
-          echo "Project found: $PROJECT_DIR"
+      - name: Configure Android SDK For Godot
+        run: |
+          mkdir -p "$HOME/.config/godot"
 
-      - name: Configure Android Export
+          cat <<EOF > "$HOME/.config/godot/editor_settings-4.tres"
+          [resource]
+          export/android/android_sdk_path = "$ANDROID_HOME"
+          export/android/java_sdk_path = "$JAVA_HOME"
+          EOF
+
+      - name: Create Android Export Preset If Missing
         shell: bash
         run: |
-          mkdir -p "$PROJECT_DIR/build"
+          PRESET="$PROJECT_DIR/export_presets.cfg"
 
-          if [ ! -f "$PROJECT_DIR/export_presets.cfg" ]; then
-            cat > "$PROJECT_DIR/export_presets.cfg" <<'EOF'
-          [preset.0]
+          if [ ! -f "$PRESET" ] || ! grep -q 'name="Android"' "$PRESET"; then
+            INDEX=$(grep -c '^\[preset\.' "$PRESET" 2>/dev/null || echo "0")
+
+            cat <<EOF >> "$PRESET"
+
+          [preset.$INDEX]
           name="Android"
           platform="Android"
           runnable=true
@@ -80,11 +127,10 @@ jobs:
           exclude_filter=""
           export_path="build/WaleedHero.apk"
 
-          [preset.0.options]
+          [preset.$INDEX.options]
           custom_template/debug=""
           custom_template/release=""
           gradle_build/use_gradle_build=false
-          gradle_build/gradle_build_directory=""
           architectures/armeabi-v7a=false
           architectures/arm64-v8a=true
           package/unique_name="com.waleed.hero"
@@ -94,17 +140,15 @@ jobs:
           EOF
           fi
 
+          mkdir -p "$PROJECT_DIR/build"
+
       - name: Import Godot Project
         run: |
-          godot --headless --editor \
-            --path "$PROJECT_DIR" --quit
+          godot --headless --editor --path "$PROJECT_DIR" --quit || true
 
       - name: Build Android APK
         run: |
-          godot --headless \
-            --path "$PROJECT_DIR" \
-            --export-debug "Android" \
-            "$PROJECT_DIR/build/WaleedHero.apk"
+          godot --headless --verbose --path "$PROJECT_DIR" --export-debug "Android" "$PROJECT_DIR/build/WaleedHero.apk"
 
       - name: Verify APK
         run: |

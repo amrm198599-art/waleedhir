@@ -1,0 +1,42 @@
+
+name: Unzip Waleed Hero and Build APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install unzip
+        run: sudo apt-get update && sudo apt-get install -y unzip
+
+      - name: Extract ZIP
+        run: |
+          mkdir -p extracted
+          ZIP_FILE=$(find . -maxdepth 1 -name "*.zip" | head -n 1)
+
+          if [ -z "$ZIP_FILE" ]; then
+            echo "ERROR: No ZIP file found"
+            exit 1
+          fi
+
+          unzip -o "$ZIP_FILE" -d extracted
+          echo "ZIP extracted successfully"
+
+      - name: Show extracted files
+        run: |
+          find extracted -maxdepth 3 -type f | head -100
+
+      - name: Upload extracted project
+        uses: actions/upload-artifact@v4
+        with:
+          name: WaleedHero-Extracted-Project
+          path: extracted/

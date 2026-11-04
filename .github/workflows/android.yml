@@ -1,42 +1,120 @@
 
-name: Unzip Waleed Hero and Build APK
+name: Waleed Hero - Build Android APK
 
 on:
   workflow_dispatch:
   push:
     branches:
       - main
+      - master
+
+permissions:
+  contents: read
 
 jobs:
-  build:
+  build-apk:
+    name: Build Waleed Hero APK
     runs-on: ubuntu-24.04
 
+    container:
+      image: barichello/godot-ci:4.3.0
+
     steps:
-      - name: Checkout repository
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
       - name: Install unzip
-        run: sudo apt-get update && sudo apt-get install -y unzip
-
-      - name: Extract ZIP
         run: |
-          mkdir -p extracted
-          ZIP_FILE=$(find . -maxdepth 1 -name "*.zip" | head -n 1)
+          apt-get update
+          apt-get install -y unzip
 
-          if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: No ZIP file found"
+      - name: Extract ZIP if needed
+        shell: bash
+        run: |
+          if ! find . -name project.godot \
+            -not -path './.git/*' | grep -q .; then
+
+            ZIP_FILE=$(find . -maxdepth 2 \
+              -name "*.zip" | head -n 1)
+
+            if [ -z "$ZIP_FILE" ]; then
+              echo "ERROR: No project.godot or ZIP found"
+              exit 1
+            fi
+
+            mkdir -p extracted
+            unzip -o "$ZIP_FILE" -d extracted
+          fi
+
+      - name: Locate Godot Project
+        shell: bash
+        run: |
+          PROJECT_FILE=$(find . -name project.godot \
+            -not -path './.git/*' | head -n 1)
+
+          if [ -z "$PROJECT_FILE" ]; then
+            echo "ERROR: project.godot not found"
             exit 1
           fi
 
-          unzip -o "$ZIP_FILE" -d extracted
-          echo "ZIP extracted successfully"
+          PROJECT_DIR=$(dirname "$PROJECT_FILE")
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-      - name: Show extracted files
+          echo "Project found: $PROJECT_DIR"
+
+      - name: Configure Android Export
+        shell: bash
         run: |
-          find extracted -maxdepth 3 -type f | head -100
+          mkdir -p "$PROJECT_DIR/build"
 
-      - name: Upload extracted project
+          if [ ! -f "$PROJECT_DIR/export_presets.cfg" ]; then
+            cat > "$PROJECT_DIR/export_presets.cfg" <<'EOF'
+          [preset.0]
+          name="Android"
+          platform="Android"
+          runnable=true
+          dedicated_server=false
+          custom_features=""
+          export_filter="all_resources"
+          include_filter=""
+          exclude_filter=""
+          export_path="build/WaleedHero.apk"
+
+          [preset.0.options]
+          custom_template/debug=""
+          custom_template/release=""
+          gradle_build/use_gradle_build=false
+          gradle_build/gradle_build_directory=""
+          architectures/armeabi-v7a=false
+          architectures/arm64-v8a=true
+          package/unique_name="com.waleed.hero"
+          version/code=1
+          version/name="1.0"
+          screen/immersive_mode=true
+          EOF
+          fi
+
+      - name: Import Godot Project
+        run: |
+          godot --headless --editor \
+            --path "$PROJECT_DIR" --quit
+
+      - name: Build Android APK
+        run: |
+          godot --headless \
+            --path "$PROJECT_DIR" \
+            --export-debug "Android" \
+            "$PROJECT_DIR/build/WaleedHero.apk"
+
+      - name: Verify APK
+        run: |
+          test -s "$PROJECT_DIR/build/WaleedHero.apk"
+          ls -lh "$PROJECT_DIR/build/WaleedHero.apk"
+
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: WaleedHero-Extracted-Project
-          path: extracted/
+          name: WaleedHero-Android-APK
+          path: ${{ env.PROJECT_DIR }}/build/WaleedHero.apk
+          if-no-files-found: error
+          retention-days: 14
